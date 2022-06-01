@@ -79,26 +79,39 @@ def peptide_bonds(G: nx.Graph) -> nx.Graph:
 ####################################
 
 
-def get_contacts_df(config: GetContactsConfig, pdb_name: str) -> pd.DataFrame:
+def get_contacts_df(config: GetContactsConfig,
+    name: str, 
+    pdb_code: Optional[str] = None, 
+    pdb_path: Optional[str] = None
+) -> pd.DataFrame:
     """
     Reads GetContact File and returns it as a pd.DataFrame
-
     :param config: GetContactsConfig object
     :type config: GetContactsConfig
-    :param pdb_name: Name of PDB file. Contacts files are name {pdb_name}_contacts.tsv
-    :type pdb_name: str
+    :param name: Name of the graph. Contacts files are {name}_contacts.tsv
+    :type name: str
+    :param pdb_code: PDB ID / Accession code, if the PDB is available on the PDB database.
+    :type pdb_code: Optional[str], defaults to ``None``
+    :param pdb_path: path to local PDB file, if constructing a graph from a local file.
+    :type pdb_path: Optional[str], defaults to ``None``
     :return: DataFrame of prased GetContacts output
     :rtype: pd.DataFrame
     """
+
+    assert (pdb_code and not pdb_path) or (not pdb_code and pdb_path), (
+        "Either a PDB ID or a path to a local PDB file"
+        " must be specified to run get contacts."
+    )
+
     if not config.contacts_dir:
         config.contacts_dir = Path("/tmp/")
 
-    contacts_file = config.contacts_dir / (pdb_name + "_contacts.tsv")
+    contacts_file = config.contacts_dir / (name + "_contacts.tsv")
 
     # Check for existence of GetContacts file
     if not os.path.isfile(contacts_file):
         log.info("GetContacts file not found. Running GetContacts...")
-        run_get_contacts(config, pdb_name)
+        run_get_contacts(config, name, pdb_code, pdb_path)
 
     contacts_df = read_contacts_file(config, contacts_file)
 
@@ -111,41 +124,49 @@ def get_contacts_df(config: GetContactsConfig, pdb_name: str) -> pd.DataFrame:
 
 def run_get_contacts(
     config: GetContactsConfig,
-    pdb_id: Optional[str] = None,
-    file_name: Optional[str] = None,
+    name: str,
+    pdb_code: Optional[str] = None,
+    pdb_path: Optional[str] = None,
 ):
     """
-    Runs GetContacts on a protein structure. If no file_name is provided, a PDB file is downloaded for the pdb_id
+    Runs GetContacts on a protein structure. If a pdb_id is given, checks for the existence 
+    of the structure and fetches from the PDB if it does not exist.
 
     :param config: GetContactsConfig object containing GetContacts parameters
     :type config: graphein.protein.config.GetContactsConfig
-    :param pdb_id: 4-character PDB accession code
-    :type pdb_id: str, optional
-    :param file_name: PDB_name file to use, if annotations to be retrieved from the PDB
-    :type file_name: str, optional
+    :param pdb_code: PDB ID / Accession code, if the PDB is available on the PDB database.
+    :type pdb_code: Optional[str], defaults to ``None``
+    :param pdb_path: path to local PDB file, if constructing a graph from a local file.
+    :type pdb_path: Optional[str], defaults to ``None``
     """
     # Check for GetContacts Installation
     assert os.path.isfile(
         f"{config.get_contacts_path}/get_static_contacts.py"
     ), "No GetContacts Installation Detected. Please install from: https://getcontacts.github.io"
 
-    # Check for existence of pdb file. If not, download it.
-    if not os.path.isfile(config.pdb_dir / file_name):
-        log.debug(
-            f"No pdb file found for {config.pdb_dir / file_name}. Checking pdb_id..."
-        )
-        if not os.path.isfile(config.pdb_dir / pdb_id):
+    assert (pdb_code and not pdb_path) or (not pdb_code and pdb_path), (
+        "Either a PDB ID or a path to a local PDB file"
+        " must be specified to run get contacts."
+    )
+
+    # If using pdb_code, check for existence of pdb file. If not, download it.
+    if pdb_code:
+        pdb_code_path = config.pdb_dir / Path(pdb_code + ".pdb")
+        if not os.path.isfile(pdb_code_path):
             log.debug(
-                f"No pdb file found for {config.pdb_dir / pdb_id}. Downloading..."
-            )
-            pdb_file = download_pdb(config, pdb_id)
+                f"No pdb file found for {pdb_code_path}. Downlading..."
+            ) 
+            pdb_file = download_pdb(config, pdb_code)
         else:
-            pdb_file = config.pdb_dir + pdb_id + ".pdb"
+            pdb_file = pdb_code_path
+    else:
+        pdb_file = pdb_path
+     
 
     # Run GetContacts
     command = f"{config.get_contacts_path}/get_static_contacts.py "
     command += f"--structure {pdb_file} "
-    command += f'--output {(config.contacts_dir / (pdb_id + "_contacts.tsv")).as_posix()} '
+    command += f'--output {(config.contacts_dir / (name + "_contacts.tsv")).as_posix()} '
     command += "--itypes all"  # --sele "protein"'
 
     log.info(f"Running GetContacts with command: {command}")
@@ -153,8 +174,8 @@ def run_get_contacts(
     subprocess.run(command, shell=True)
 
     # Check it all checks out
-    assert os.path.isfile(config.contacts_dir / (pdb_id + "_contacts.tsv"))
-    log.info(f"Computed Contacts for: {pdb_id}")
+    assert os.path.isfile(config.contacts_dir / (name + "_contacts.tsv"))
+    log.info(f"Computed Contacts for: {name}")
 
 
 def read_contacts_file(
@@ -217,7 +238,8 @@ def add_contacts_edge(G: nx.Graph, interaction_type: str) -> nx.Graph:
         log.info("No 'contacts_df' found in G.graph. Running GetContacts.")
 
         G.graph["contacts_df"] = get_contacts_df(
-            G.graph["config"].get_contacts_config, G.graph["pdb_id"]
+            G.graph["config"].get_contacts_config, G.graph["name"], G.graph['pdb_code'],
+            G.graph['pdb_path']
         )
 
     contacts = G.graph["contacts_df"]
