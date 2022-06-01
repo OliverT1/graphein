@@ -14,6 +14,7 @@ from typing import Optional
 
 import networkx as nx
 import pandas as pd
+from graphein.protein.config import GetContactsConfig
 
 from graphein.protein.utils import download_pdb
 
